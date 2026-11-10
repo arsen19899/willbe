@@ -1,0 +1,932 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CallQA — анализ звонков</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#fff; --ink:#1b1e24; --muted:#697086; --line:#e2e5ec;
+    --accent:#2f5fd0; --ok:#12805c; --ok-bg:#e4f5ee; --no:#c0392b; --no-bg:#fcebe9;
+    --na:#8a8f9c; --na-bg:#f0f1f4; --warn:#a56a00; --warn-bg:#fdf3e0;
+    --radius:10px; --shadow:0 1px 3px rgba(20,25,40,.08);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#14161b;--panel:#1c1f26;--ink:#e8eaee;--muted:#9aa1b1;--line:#2b2f39;
+      --accent:#6f9bff;--ok:#4fd1a0;--ok-bg:#12312a;--no:#ff8a7a;--no-bg:#3a1f1c;
+      --na:#8a8f9c;--na-bg:#24272f;--warn:#e0b25f;--warn-bg:#332a17;
+      --shadow:0 1px 3px rgba(0,0,0,.4);}
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:14px/1.5 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+  header{background:var(--panel);border-bottom:1px solid var(--line);padding:10px 20px;
+    display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:20}
+  h1{font-size:16px;margin:0;font-weight:650;letter-spacing:-.01em}
+  h1 span{color:var(--muted);font-weight:400;margin-left:8px;font-size:13px}
+  nav{display:flex;gap:4px;margin-left:auto}
+  nav button{background:none;border:1px solid transparent;color:var(--muted);
+    padding:6px 14px;border-radius:8px;cursor:pointer;font:inherit}
+  nav button.on{background:var(--accent);color:#fff}
+  nav button:hover:not(.on){border-color:var(--line);color:var(--ink)}
+  main{max-width:1500px;margin:0 auto;padding:20px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:18px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .card h2{font-size:14px;margin:0 0 12px;font-weight:650}
+  .card h2 small{font-weight:400;color:var(--muted);margin-left:8px}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+  button.act{background:var(--accent);color:#fff;border:none;padding:9px 18px;
+    border-radius:8px;cursor:pointer;font:inherit;font-weight:500}
+  button.act:disabled{opacity:.45;cursor:not-allowed}
+  button.ghost{background:none;border:1px solid var(--line);color:var(--ink);
+    padding:8px 14px;border-radius:8px;cursor:pointer;font:inherit}
+  button.ghost:hover{border-color:var(--accent);color:var(--accent)}
+  button.mini{font-size:12px;padding:3px 9px;border-radius:6px;border:1px solid var(--line);
+    background:none;color:var(--muted);cursor:pointer}
+  button.mini:hover{color:var(--no);border-color:var(--no)}
+  input,select,textarea{background:var(--bg);border:1px solid var(--line);color:var(--ink);
+    padding:8px 10px;border-radius:8px;font:inherit;width:100%}
+  input:focus,select:focus,textarea:focus{outline:none;border-color:var(--accent)}
+  textarea{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;resize:vertical}
+  label{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+  .drop{border:2px dashed var(--line);border-radius:var(--radius);padding:34px;
+    text-align:center;color:var(--muted);cursor:pointer;transition:.15s}
+  .drop:hover,.drop.over{border-color:var(--accent);color:var(--accent);
+    background:color-mix(in srgb,var(--accent) 6%,transparent)}
+  .bar{height:8px;background:var(--bg);border-radius:99px;overflow:hidden;
+    border:1px solid var(--line)}
+  .bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .3s}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{border-bottom:1px solid var(--line);padding:7px 9px;text-align:left;
+    vertical-align:top}
+  th{position:sticky;top:0;background:var(--panel);font-weight:600;font-size:12px;
+    color:var(--muted);z-index:2;white-space:nowrap}
+  tbody tr:hover{background:color-mix(in srgb,var(--accent) 5%,transparent)}
+  .scroll{overflow:auto;max-height:70vh;border:1px solid var(--line);border-radius:8px}
+  .pill{display:inline-block;padding:2px 9px;border-radius:99px;font-size:12px;
+    font-weight:500;white-space:nowrap}
+  .yes{background:var(--ok-bg);color:var(--ok)}
+  .no{background:var(--no-bg);color:var(--no)}
+  .na{background:var(--na-bg);color:var(--na)}
+  .warnbox{background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:10px 12px;
+    font-size:13px;margin-bottom:10px}
+  .kv{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+  .kv div{background:var(--bg);border-radius:8px;padding:9px 11px}
+  .kv b{display:block;font-size:19px;font-weight:600}
+  .kv span{font-size:11.5px;color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .chk{border:1px solid var(--line);border-radius:8px;padding:12px;margin-bottom:8px;
+    background:var(--bg)}
+  .chk .hd{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .chk .hd input[type=text]{flex:1}
+  .muted{color:var(--muted);font-size:12.5px}
+  .quote{font-style:italic;color:var(--muted);font-size:12.5px}
+  .tag{font-size:11px;background:var(--bg);border:1px solid var(--line);
+    padding:1px 7px;border-radius:5px;color:var(--muted)}
+  .env{display:flex;gap:8px;flex-wrap:wrap;font-size:12px}
+  .env span{padding:3px 10px;border-radius:99px;background:var(--na-bg);color:var(--na)}
+  .env span.on{background:var(--ok-bg);color:var(--ok)}
+  .env span.off{background:var(--no-bg);color:var(--no)}
+  details{border-top:1px solid var(--line);padding-top:10px;margin-top:10px}
+  summary{cursor:pointer;font-weight:600;font-size:13px;margin-bottom:8px}
+  .hide{display:none}
+  button.mini2{font-size:12px;padding:4px 10px}
+  #tbl td{max-width:340px}
+  #tbl td:first-child{max-width:220px}
+  .catbar{display:flex;align-items:center;gap:8px;margin-bottom:5px}
+  .catbar .n{flex:0 0 200px;font-size:12.5px}
+  .catbar .b{flex:1;height:7px;background:var(--bg);border-radius:99px;overflow:hidden}
+  .catbar .b i{display:block;height:100%;background:var(--accent)}
+  .catbar .v{flex:0 0 46px;text-align:right;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <h1>CallQA <span>анализ записей звонков</span></h1>
+  <nav>
+    <button data-tab="run" class="on">Анализ</button>
+    <button data-tab="res">Результаты</button>
+    <button data-tab="learn">Обучение</button>
+    <button data-tab="cfg">Настройки</button>
+  </nav>
+</header>
+
+<main>
+<!-- ================= АНАЛИЗ ================= -->
+<section id="tab-run">
+  <div class="card">
+    <h2>Окружение</h2>
+    <div class="env" id="env">проверяю…</div>
+  </div>
+
+  <div class="card">
+    <h2>Записи <small>перетащите файлы или укажите папку на этом компьютере</small></h2>
+    <div class="drop" id="drop">
+      Перетащите сюда аудиофайлы<br>
+      <span class="muted">wav · mp3 · m4a · ogg · flac — или нажмите, чтобы выбрать</span>
+      <input type="file" id="file" multiple accept="audio/*,video/*" class="hide">
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="path" placeholder="или путь к папке, например D:\records\2026-08" style="flex:1">
+      <label style="width:auto;margin:0;display:flex;gap:6px;align-items:center;color:var(--ink)">
+        <input type="checkbox" id="recursive" checked style="width:auto"> с подпапками
+      </label>
+      <button class="ghost" id="btnPath">Разобрать папку</button>
+    </div>
+    <div class="row" style="margin-top:12px;justify-content:space-between">
+      <span class="muted">Хотите сначала посмотреть, как выглядит отчёт?</span>
+      <button class="ghost" id="btnDemo">Показать на примере</button>
+    </div>
+    <div id="picked" class="muted" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card hide" id="progress">
+    <h2>Обработка</h2>
+    <div class="bar"><i id="barfill"></i></div>
+    <div class="row" style="margin-top:10px;justify-content:space-between">
+      <span class="muted" id="pmsg">…</span>
+      <button class="ghost" id="btnStop">Остановить</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= РЕЗУЛЬТАТЫ ================= -->
+<section id="tab-res" class="hide">
+  <div id="resEmpty" class="card muted">Результатов пока нет — начните с вкладки «Анализ».</div>
+  <div id="resBody" class="hide">
+    <div class="card">
+      <div class="row" style="justify-content:space-between">
+        <div class="kv" style="flex:1" id="totals"></div>
+      </div>
+      <div class="row" style="margin-top:14px">
+        <button class="act" id="dlXlsx">Скачать Excel</button>
+        <button class="ghost" id="dlCsv">CSV</button>
+        <button class="ghost" id="dlJson">JSON</button>
+        <span class="muted" id="savedTo"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Сводная таблица <small>что было и чего не было</small></h2>
+      <div class="scroll"><table id="tbl"></table></div>
+    </div>
+
+    <div class="card" id="callCard">
+      <h2>Разбор звонка</h2>
+      <select id="callSel" style="max-width:460px;margin-bottom:14px"></select>
+      <div id="callBody"></div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ================= ОБУЧЕНИЕ ================= -->
+<section id="tab-learn" class="hide">
+  <div class="card">
+    <h2>Обучение на размеченных записях</h2>
+    <p class="muted" style="margin-top:0">
+      Разложите записи по двум папкам — успешные разговоры и неуспешные.
+      Программа расшифрует их и найдёт фразы и метрики, которые статистически
+      отличают одни от других. Найденное станет предложением: вы отмечаете,
+      что взять, и потом правите руками на вкладке «Настройки».
+      Существующий чек-лист не перезаписывается.
+    </p>
+    <div class="grid2" style="margin-top:14px">
+      <div><label>Папка с УСПЕШНЫМИ разговорами</label>
+        <input id="lgood" placeholder="D:\records\успешные"></div>
+      <div><label>Папка с НЕУСПЕШНЫМИ разговорами</label>
+        <input id="lbad" placeholder="D:\records\неуспешные"></div>
+    </div>
+    <details style="margin-top:12px"><summary>Строгость отбора</summary>
+      <div class="grid3">
+        <div><label>Минимум записей с фразой</label>
+          <input id="lmin" type="number" value="3" min="2">
+          <span class="muted">реже — считаем случайностью</span></div>
+        <div><label>Порог значимости (q)</label>
+          <input id="lq" type="number" value="0.10" step="0.01" min="0.01" max="0.5">
+          <span class="muted">доля мусора среди отобранного</span></div>
+        <div><label>Минимальный эффект (во сколько раз чаще)</label>
+          <input id="llift" type="number" value="1.6" step="0.1" min="1.1"></div>
+      </div>
+    </details>
+    <div class="row" style="margin-top:14px">
+      <button class="act" id="lstart">Обучить</button>
+      <span class="muted">первый прогон расшифровывает записи, повторные —
+        берут расшифровки из кэша</span>
+    </div>
+  </div>
+
+  <div class="card hide" id="lprogress">
+    <h2>Обучение</h2>
+    <div class="bar"><i id="lbar"></i></div>
+    <div class="muted" id="lmsg" style="margin-top:10px">…</div>
+  </div>
+
+  <div id="lresult"></div>
+</section>
+
+<!-- ================= НАСТРОЙКИ ================= -->
+<section id="tab-cfg" class="hide">
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <span class="muted">Конфиг: <b id="cfgPath"></b></span>
+      <div class="row">
+        <button class="ghost" id="cfgReset">Вернуть эталонный</button>
+        <button class="act" id="cfgSave">Сохранить настройки</button>
+      </div>
+    </div>
+    <div id="cfgMsg" class="muted" style="margin-top:8px"></div>
+  </div>
+
+  <div class="card">
+    <h2>Товары и услуги <small>что оператор обязан предложить</small></h2>
+    <div id="prods"></div>
+    <button class="ghost" id="addProd" style="margin-top:8px">+ Товар</button>
+  </div>
+
+  <div class="card">
+    <h2>Чек-лист <small>каждый пункт — колонка «было / не было» в отчёте</small></h2>
+    <div id="checks"></div>
+    <button class="ghost" id="addCheck" style="margin-top:8px">+ Пункт</button>
+  </div>
+
+  <div class="card">
+    <h2>Фильтры</h2>
+    <div class="grid3">
+      <div><label>Минимальная длительность, сек</label><input id="f_min" type="number"></div>
+      <div><label>Максимальная длительность, сек</label><input id="f_max" type="number"></div>
+      <div><label>Минимум распознанных слов</label><input id="f_words" type="number"></div>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label>Брать только файлы, где имя содержит (по строке; re: — регулярка)</label>
+        <textarea id="f_inc" rows="3"></textarea></div>
+      <div><label>Пропускать файлы, где имя содержит</label>
+        <textarea id="f_exc" rows="3"></textarea></div>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label>Стоп-фразы оператора (по одной в строке)</label>
+        <textarea id="f_stop" rows="5"></textarea></div>
+      <div><label>Нежелательная лексика</label>
+        <textarea id="f_prof" rows="5"></textarea></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Распознавание и поиск</h2>
+    <div class="grid3">
+      <div><label>Модель whisper</label>
+        <select id="a_model">
+          <option>tiny</option><option>base</option><option>small</option>
+          <option>medium</option><option>large-v3</option>
+        </select></div>
+      <div><label>Устройство</label>
+        <select id="a_device"><option>auto</option><option>cuda</option><option>cpu</option></select></div>
+      <div><label>Язык</label><input id="a_lang"></div>
+    </div>
+    <div class="grid3" style="margin-top:12px">
+      <div><label>Дорожки стерео: левая — это</label>
+        <select id="s_left"><option value="operator">оператор</option>
+          <option value="client">клиент</option></select></div>
+      <div><label>Разделение голосов</label>
+        <select id="s_mode"><option value="auto">авто</option>
+          <option value="stereo">только по каналам</option>
+          <option value="diarize">только по голосам</option></select></div>
+      <div><label>Токен HuggingFace (для моно-записей)</label><input id="s_hf"></div>
+    </div>
+    <div class="grid3" style="margin-top:12px">
+      <div><label>Нечёткий поиск, порог 0–100 (0 = выкл.)</label>
+        <input id="m_fuzzy" type="number"></div>
+      <div><label>Учитывать формы слов</label>
+        <select id="m_lem"><option value="true">да</option><option value="false">нет</option></select></div>
+      <div><label>Подсказка whisper (редкие слова, названия)</label><input id="a_prompt"></div>
+    </div>
+    <div class="grid3" style="margin-top:12px">
+      <div><label>Перебивание: минимальное наложение, сек</label><input id="x_ov" type="number" step="0.1"></div>
+      <div><label>Перебивание: минимум слов</label><input id="x_words" type="number"></div>
+      <div><label>Затяжная пауза, сек</label><input id="x_pause" type="number" step="0.5"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Смысловая оценка моделью</h2>
+    <div class="grid3">
+      <div><label>Включена</label>
+        <select id="l_on"><option value="true">да</option><option value="false">нет</option></select></div>
+      <div><label>Провайдер</label>
+        <select id="l_prov"><option value="anthropic">anthropic</option>
+          <option value="openai">openai-совместимый</option>
+          <option value="none">нет</option></select></div>
+      <div><label>Модель</label><input id="l_model"></div>
+    </div>
+    <div class="grid2" style="margin-top:12px">
+      <div><label>Переменная окружения с ключом</label><input id="l_env"></div>
+      <div><label>Базовый URL (для своего шлюза, необязательно)</label><input id="l_url"></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <details><summary>Полный конфиг в YAML</summary>
+      <textarea id="rawYaml" rows="22"></textarea>
+      <div class="row" style="margin-top:10px">
+        <button class="ghost" id="yamlApply">Применить YAML</button>
+        <span class="muted">переопределяет всё, что выше</span>
+      </div>
+    </details>
+  </div>
+</section>
+</main>
+
+<script>
+const TABS = ['run','res','learn','cfg'];
+function showTab(name){
+  $$('nav button').forEach(x => x.classList.toggle('on', x.dataset.tab === name));
+  TABS.forEach(t => $('#tab-'+t).classList.toggle('hide', t !== name));
+}
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+let CFG = null, JOB = null, TABLE = null, POLL = null;
+
+/* ---------- навигация ---------- */
+$$('nav button').forEach(b => b.onclick = () => {
+  $$('nav button').forEach(x => x.classList.toggle('on', x === b));
+  TABS.forEach(t => $('#tab-'+t).classList.toggle('hide', t !== b.dataset.tab));
+});
+
+/* ---------- окружение ---------- */
+fetch('/api/env').then(r => r.json()).then(e => {
+  // «нет» само по себе не всегда проблема: без диаризации и без LLM
+  // программа работает полноценно — поэтому такие пункты нейтральные
+  const items = [
+    ['распознавание речи', e.faster_whisper, e.asr_model || '', true],
+    ['видеокарта', e.gpu, e.gpu_name || 'не найдена', false],
+    ['GPU для распознавания', e.cuda_asr,
+      e.cuda_asr ? `${e.device}/${e.compute_type}` : 'считает процессор', false],
+    ['ffmpeg', e.ffmpeg, e.ffmpeg ? 'mp3/m4a/ogg' : 'только WAV', false],
+    ['морфология', e.pymorphy, 'формы слов', false],
+    ['нечёткий поиск', e.rapidfuzz, 'опечатки распознавания', false],
+    ['разделение голосов', e.pyannote, e.pyannote ? '' : 'нужно только для моно', false],
+    ['смысловая оценка', e.llm,
+      e.llm ? (e.llm_local ? 'локально: ' + e.llm_model : e.llm_model)
+            : 'не нужна: чек-лист на правилах', false],
+  ];
+  $('#env').innerHTML = items.map(([label, ok, note, critical]) => {
+    const cls = ok ? 'on' : (critical ? 'off' : '');
+    return `<span class="${cls}" title="${esc(note)}">${label}: ${
+      ok ? 'есть' : 'нет'}${note ? ' · ' + esc(note) : ''}</span>`;
+  }).join('');
+});
+
+/* ---------- выбор файлов ---------- */
+const drop = $('#drop'), fileInput = $('#file');
+drop.onclick = () => fileInput.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); upload(e.dataTransfer.files); };
+fileInput.onchange = () => upload(fileInput.files);
+
+async function upload(files){
+  if(!files || !files.length) return;
+  const fd = new FormData();
+  [...files].forEach(f => fd.append('files', f));
+  $('#picked').textContent = `Загружаю ${files.length} файл(ов)…`;
+  const r = await fetch('/api/analyze/upload', {method:'POST', body:fd});
+  startJob(r);
+}
+$('#btnPath').onclick = async () => {
+  const path = $('#path').value.trim();
+  if(!path) return alert('Укажите путь к папке или файлу');
+  const r = await fetch('/api/analyze/path', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({path, recursive: $('#recursive').checked})});
+  startJob(r);
+};
+
+async function startJob(r){
+  if(!r.ok){ const e = await r.json().catch(()=>({detail:'ошибка'}));
+    $('#picked').textContent = ''; return alert(e.detail || 'Не удалось запустить'); }
+  const j = await r.json();
+  JOB = j.job_id;
+  $('#picked').textContent = `В работе: ${j.total} файл(ов)`;
+  $('#progress').classList.remove('hide');
+  clearInterval(POLL);
+  POLL = setInterval(poll, 900);
+}
+$('#btnStop').onclick = () => JOB && fetch(`/api/jobs/${JOB}/stop`, {method:'POST'});
+$('#btnDemo').onclick = async () => {
+  $('#picked').textContent = 'Считаю пример…';
+  const r = await fetch('/api/demo', {method:'POST'});
+  const j = await r.json(); JOB = j.job_id;
+  $('#picked').textContent = 'Разобран встроенный пример';
+  TABLE = await (await fetch(`/api/jobs/${JOB}/result`)).json();
+  render();
+  showTab('res');
+};
+
+async function poll(){
+  if(!JOB) return;
+  const s = await (await fetch(`/api/jobs/${JOB}`)).json();
+  $('#barfill').style.width = (s.progress*100).toFixed(1)+'%';
+  $('#pmsg').textContent = s.message;
+  if(s.status === 'done'){
+    clearInterval(POLL);
+    $('#pmsg').textContent = 'Готово';
+    TABLE = await (await fetch(`/api/jobs/${JOB}/result`)).json();
+    $('#savedTo').textContent = 'Отчёт также сохранён в папку reports';
+    render();
+    showTab('res');
+  } else if(s.status === 'error'){
+    clearInterval(POLL); $('#pmsg').textContent = 'Ошибка: ' + s.error;
+  }
+}
+
+/* ---------- результаты ---------- */
+function badge(v){
+  const c = v === 'было' ? 'yes' : v === 'не было' ? 'no' : 'na';
+  return `<span class="pill ${c}">${v}</span>`;
+}
+function render(){
+  if(!TABLE) return;
+  $('#resEmpty').classList.add('hide'); $('#resBody').classList.remove('hide');
+  const ok = TABLE.calls.filter(c => c.ok);
+  const avg = ok.length ? (ok.reduce((a,c)=>a+c.score_pct,0)/ok.length).toFixed(1) : '—';
+  const inter = ok.reduce((a,c)=>a+(c.interruptions||[]).length,0);
+  const failed = ok.reduce((a,c)=>a+c.checks.filter(x=>x.required&&x.status==='не было').length,0);
+  $('#totals').innerHTML = [
+    ['Звонков разобрано', ok.length+' из '+TABLE.calls.length],
+    ['Средний балл', avg+' %'],
+    ['Перебиваний всего', inter],
+    ['Критичных провалов', failed],
+  ].map(([s,b]) => `<div><b>${b}</b><span>${s}</span></div>`).join('');
+
+  const t = $('#tbl');
+  t.innerHTML = '<thead><tr>' + TABLE.header.map(h=>`<th>${h}</th>`).join('') + '</tr></thead><tbody>'
+    + TABLE.rows.map(r => '<tr>' + r.map(v => {
+        const s = v === null || v === undefined ? '' : String(v);
+        return `<td>${['было','не было','н/д'].includes(s) ? badge(s) : esc(s)}</td>`;
+      }).join('') + '</tr>').join('') + '</tbody>';
+
+  const sel = $('#callSel');
+  sel.innerHTML = TABLE.calls.map((c,i) =>
+    `<option value="${i}">${esc(c.file)} — ${c.ok ? c.score_pct+' %' : 'не разобран'}</option>`).join('');
+  sel.onchange = () => renderCall(+sel.value);
+  renderCall(0);
+}
+
+function renderCall(i){
+  const c = TABLE.calls[i]; if(!c) return;
+  if(!c.ok){ $('#callBody').innerHTML = `<div class="warnbox">Файл не разобран: ${esc(c.reason)}</div>`; return; }
+  const cats = Object.entries(c.categories||{}).sort();
+  const v = c.verdict;
+  const byCat = {};
+  c.checks.forEach(x => (byCat[x.category] = byCat[x.category] || []).push(x));
+
+  $('#callBody').innerHTML = `
+    ${(c.warnings||[]).map(w=>`<div class="warnbox">${esc(w)}</div>`).join('')}
+    <div class="kv" style="margin-bottom:14px">
+      <div><b>${c.score_pct} %</b><span>${esc(c.grade)}</span></div>
+      <div><b>${(c.duration/60).toFixed(1)}</b><span>минут</span></div>
+      <div><b>${c.interruptions.length}</b><span>перебиваний</span></div>
+      <div><b>${Math.round((c.metrics['Доля речи оператора']||0)*100)} %</b><span>речи у оператора</span></div>
+    </div>
+    ${v ? `<div class="card" style="margin:0 0 16px;box-shadow:none">
+      <h2 style="margin-bottom:8px">Итог: ${esc(v.headline)}</h2>
+      <ul style="margin:0 0 10px 18px">${v.lines.map(l=>`<li>${esc(l)}</li>`).join('')}</ul>
+      ${v.advice?.length ? `<b style="font-size:13px">Что исправить</b>
+        <ul style="margin:6px 0 0 18px">${v.advice.map(a=>`<li>${esc(a)}</li>`).join('')}</ul>` : ''}
+    </div>` : ''}
+    ${cats.length ? '<div style="margin-bottom:16px">' + cats.map(([n,v2]) =>
+      `<div class="catbar"><span class="n">${esc(n)}</span>
+       <span class="b"><i style="width:${v2}%"></i></span><span class="v">${v2}%</span></div>`).join('') + '</div>' : ''}
+    ${c.summary ? `<p><b>Резюме.</b> ${esc(c.summary)}</p>` : ''}
+    ${c.recommendations?.length ? `<p><b>Рекомендации оператору</b></p><ul>${
+      c.recommendations.map(r=>`<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+
+    <details open><summary>Чек-лист</summary>
+      <div class="scroll" style="max-height:none">
+      <table><thead><tr><th>Пункт</th><th>Что найдено</th><th>Все срабатывания</th>
+        <th>Обоснование</th><th>Цитата</th></tr></thead><tbody>
+      ${Object.entries(byCat).map(([cat, items]) =>
+        `<tr><td colspan="5" style="background:var(--bg);font-weight:600">${esc(cat)}</td></tr>` +
+        items.map(x => `<tr>
+          <td>${esc(x.title)}${x.required?' <span class="tag">критичный</span>':''}</td>
+          <td>${stateCell(x)}</td>
+          <td>${hits(x.evidence)}</td>
+          <td class="muted">${esc(x.detail||'')}</td>
+          <td class="quote">${esc(x.evidence?.[0]?.quote||'')}</td></tr>`).join('')).join('')}
+      </tbody></table></div>
+    </details>
+
+    <details open><summary>Товары и услуги</summary>
+      <table><thead><tr><th>Товар</th><th>Обязателен</th><th>Что найдено</th>
+        <th>Как найдено</th><th>Цитата</th></tr></thead><tbody>
+      ${c.products.map(p=>`<tr><td>${esc(p.name)}</td>
+        <td class="muted">${p.required?'да':''}</td>
+        <td><span class="pill ${p.offered?'yes':'no'}">${esc(p.cell||'')}</span></td>
+        <td class="muted">${esc(p.how||'')}</td>
+        <td class="quote">${esc(p.evidence?.[0]?.quote||'')}</td></tr>`).join('')}
+      </tbody></table>
+    </details>
+
+    ${c.interruptions.length ? `<details><summary>Перебивания (${c.interruptions.length})</summary>
+      <table><thead><tr><th>Время</th><th>Кто</th><th>Реплика</th><th>Что перебили</th></tr></thead><tbody>
+      ${c.interruptions.map(e=>`<tr><td>${fmt(e.at)}</td><td>${esc(e.by)}</td>
+        <td class="quote">${esc(e.quote)}</td><td class="quote">${esc(e.interrupted)}</td></tr>`).join('')}
+      </tbody></table></details>` : ''}
+
+    <details open><summary>Журнал находок — что и на какой секунде (${(c.findings||[]).length})</summary>
+      <div class="scroll" style="max-height:420px">
+      <table><thead><tr><th>Время</th><th>Сек.</th><th>Тип</th><th>Что сработало</th>
+        <th>Найдено в записи</th><th>Кто</th><th>Как найдено</th><th>Цитата</th></tr></thead><tbody>
+      ${(c.findings||[]).map(f=>`<tr>
+        <td style="white-space:nowrap"><b>${esc(f.time)}</b></td>
+        <td class="muted">${f.sec}</td>
+        <td class="muted">${esc(f.kind)}</td>
+        <td>${esc(f.what)}</td>
+        <td><b>${esc(f.pattern||'')}</b></td>
+        <td class="muted">${esc(f.speaker||'')}</td>
+        <td class="muted">${esc(f.how||'')}</td>
+        <td class="quote">${esc(f.quote||'')}</td></tr>`).join('')}
+      </tbody></table></div>
+    </details>
+
+    <details><summary>Метрики</summary>
+      <div class="kv">${Object.entries(c.metrics).map(([k,v])=>
+        `<div><b>${typeof v==='number'?(Math.round(v*100)/100):esc(String(v))}</b><span>${esc(k)}</span></div>`).join('')}</div>
+    </details>
+
+    <details><summary>Транскрипт</summary><div id="tr${i}" class="muted">загрузить…</div></details>`;
+
+  const box = $('#tr'+i);
+  box.parentElement.addEventListener('toggle', async e => {
+    if(!e.target.open || box.dataset.loaded) return;
+    box.dataset.loaded = 1;
+    const d = await (await fetch(`/api/jobs/${JOB}/transcript?file=${encodeURIComponent(c.file)}`)).json();
+    box.innerHTML = '<table><tbody>' + d.segments.map(s =>
+      `<tr><td class="muted" style="white-space:nowrap">${fmt(s.start)}</td>
+       <td style="white-space:nowrap"><b>${esc(s.speaker)}</b></td>
+       <td style="color:var(--ink)">${esc(s.text)}</td></tr>`).join('') + '</tbody></table>';
+  }, {once:false});
+}
+
+$('#dlXlsx').onclick = () => location = `/api/jobs/${JOB}/report?fmt=xlsx`;
+$('#dlCsv').onclick  = () => location = `/api/jobs/${JOB}/report?fmt=csv`;
+$('#dlJson').onclick = () => location = `/api/jobs/${JOB}/report?fmt=json`;
+
+/* ---------- настройки ---------- */
+async function loadCfg(){
+  const d = await (await fetch('/api/config')).json();
+  CFG = d.config; $('#cfgPath').textContent = d.path; $('#rawYaml').value = d.yaml;
+  fillForm();
+}
+function fillForm(){
+  const c = CFG;
+  $('#a_model').value = c.asr.model; $('#a_device').value = c.asr.device;
+  $('#a_lang').value = c.asr.language; $('#a_prompt').value = c.asr.initial_prompt || '';
+  $('#s_left').value = c.speakers.left; $('#s_mode').value = c.speakers.mode;
+  $('#s_hf').value = c.speakers.hf_token || '';
+  $('#m_fuzzy').value = c.matching.fuzzy_threshold;
+  $('#m_lem').value = String(c.matching.lemmatize);
+  $('#x_ov').value = c.metrics.interruption_overlap_sec;
+  $('#x_words').value = c.metrics.interruption_min_words;
+  $('#x_pause').value = c.metrics.long_pause_sec;
+  $('#l_on').value = String(c.llm.enabled); $('#l_prov').value = c.llm.provider;
+  $('#l_model').value = c.llm.model; $('#l_env').value = c.llm.api_key_env;
+  $('#l_url').value = c.llm.base_url || '';
+  $('#f_min').value = c.filters.min_duration_sec; $('#f_max').value = c.filters.max_duration_sec;
+  $('#f_words').value = c.filters.min_words;
+  $('#f_inc').value = (c.filters.file_name_include||[]).join('\n');
+  $('#f_exc').value = (c.filters.file_name_exclude||[]).join('\n');
+  $('#f_stop').value = (c.filters.stop_phrases||[]).join('\n');
+  $('#f_prof').value = (c.filters.profanity||[]).join('\n');
+  renderProducts(); renderChecks();
+}
+function renderProducts(){
+  $('#prods').innerHTML = CFG.products.map((p,i)=>`
+    <div class="chk" data-i="${i}">
+      <div class="hd">
+        <input type="text" class="p_name" value="${esc(p.name)}" placeholder="Название товара">
+        <input type="text" class="p_group" value="${esc(p.group||'')}" placeholder="Группа" style="max-width:150px">
+        <label style="display:flex;gap:5px;align-items:center;color:var(--ink);margin:0;white-space:nowrap">
+          <input type="checkbox" class="p_req" ${p.required?'checked':''} style="width:auto"> обязателен</label>
+        <button class="mini p_del">удалить</button>
+      </div>
+      <label>Как это звучит в речи (по одному варианту в строке)</label>
+      <textarea class="p_alias" rows="4">${esc((p.aliases||[]).join('\n'))}</textarea>
+    </div>`).join('');
+  $$('.p_del').forEach(b => b.onclick = e => {
+    const i = +e.target.closest('.chk').dataset.i;
+    collect();                    // сначала забираем правки из полей,
+    CFG.products.splice(i, 1);    // и только потом удаляем строку
+    renderProducts();
+  });
+}
+const TYPES = {keyword:'ключевые фразы', regex:'регулярка', metric:'метрика',
+  llm:'смысловая оценка', product:'товары'};
+function renderChecks(){
+  $('#checks').innerHTML = CFG.checks.map((c,i)=>`
+    <div class="chk" data-i="${i}">
+      <div class="hd">
+        <input type="text" class="c_title" value="${esc(c.title)}" placeholder="Название пункта">
+        <input type="text" class="c_cat" value="${esc(c.category||'')}" placeholder="Категория" style="max-width:160px">
+        <select class="c_type" style="max-width:170px">${Object.entries(TYPES).map(([k,v])=>
+          `<option value="${k}" ${c.type===k?'selected':''}>${v}</option>`).join('')}</select>
+        <select class="c_spk" style="max-width:120px">
+          <option value="operator" ${c.speaker==='operator'?'selected':''}>оператор</option>
+          <option value="client" ${c.speaker==='client'?'selected':''}>клиент</option>
+          <option value="any" ${c.speaker==='any'?'selected':''}>любой</option></select>
+        <input type="number" class="c_w" value="${c.weight}" title="вес" style="max-width:70px">
+        <label style="display:flex;gap:5px;align-items:center;color:var(--ink);margin:0;white-space:nowrap">
+          <input type="checkbox" class="c_req" ${c.required?'checked':''} style="width:auto"> критичный</label>
+        <button class="mini c_del">удалить</button>
+      </div>
+      <div class="c_kw ${['keyword','regex'].includes(c.type)?'':'hide'}">
+        <div class="grid2">
+          <div><label>Достаточно любой из фраз (по одной в строке; re: — регулярка)</label>
+            <textarea class="c_any" rows="4">${esc((c.any_of||[]).join('\n'))}</textarea></div>
+          <div><label>Должны встретиться все / не должно быть ни одной</label>
+            <textarea class="c_all" rows="1" placeholder="все обязательные">${esc((c.all_of||[]).join('\n'))}</textarea>
+            <textarea class="c_none" rows="1" placeholder="запрещённые" style="margin-top:6px">${esc((c.none_of||[]).join('\n'))}</textarea></div>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <label style="display:flex;gap:5px;align-items:center;color:var(--ink);margin:0">
+            <input type="checkbox" class="c_inv" ${c.invert?'checked':''} style="width:auto">
+            пункт пройден, если фраз НЕТ</label>
+          <span class="muted">искать в окне, сек:</span>
+          <input type="number" class="c_tf" value="${c.time_from??''}" placeholder="от" style="max-width:80px">
+          <input type="number" class="c_tt" value="${c.time_to??''}" placeholder="до" style="max-width:80px">
+        </div>
+      </div>
+      <div class="c_mt ${c.type==='metric'?'':'hide'}">
+        <div class="row">
+          <input type="text" class="c_metric" value="${esc(c.metric||'')}" placeholder="метрика, напр. operator_interruptions" style="flex:1">
+          <select class="c_op" style="max-width:80px">${['<=','<','>=','>','==','!='].map(o=>
+            `<option ${c.op===o?'selected':''}>${o}</option>`).join('')}</select>
+          <input type="number" step="0.01" class="c_val" value="${c.value}" style="max-width:110px">
+        </div>
+      </div>
+      <div class="c_llm ${c.type==='llm'?'':'hide'}">
+        <label>Вопрос к модели</label>
+        <textarea class="c_prompt" rows="2">${esc(c.prompt||'')}</textarea>
+      </div>
+    </div>`).join('');
+  $$('.c_del').forEach(b => b.onclick = e => {
+    const i = +e.target.closest('.chk').dataset.i;
+    collect();                    // сначала забираем правки из полей,
+    CFG.checks.splice(i, 1);      // и только потом удаляем пункт
+    renderChecks();
+  });
+  $$('.c_type').forEach(s => s.onchange = e => {
+    const box = e.target.closest('.chk'), v = e.target.value;
+    box.querySelector('.c_kw').classList.toggle('hide', !['keyword','regex'].includes(v));
+    box.querySelector('.c_mt').classList.toggle('hide', v!=='metric');
+    box.querySelector('.c_llm').classList.toggle('hide', v!=='llm');
+  });
+}
+const lines = el => el.value.split('\n').map(s=>s.trim()).filter(Boolean);
+function collect(){
+  const c = CFG;
+  c.asr.model = $('#a_model').value; c.asr.device = $('#a_device').value;
+  c.asr.language = $('#a_lang').value; c.asr.initial_prompt = $('#a_prompt').value;
+  c.speakers.left = $('#s_left').value;
+  c.speakers.right = $('#s_left').value === 'operator' ? 'client' : 'operator';
+  c.speakers.mode = $('#s_mode').value; c.speakers.hf_token = $('#s_hf').value;
+  c.matching.fuzzy_threshold = +$('#m_fuzzy').value;
+  c.matching.lemmatize = $('#m_lem').value === 'true';
+  c.metrics.interruption_overlap_sec = +$('#x_ov').value;
+  c.metrics.interruption_min_words = +$('#x_words').value;
+  c.metrics.long_pause_sec = +$('#x_pause').value;
+  c.llm.enabled = $('#l_on').value === 'true'; c.llm.provider = $('#l_prov').value;
+  c.llm.model = $('#l_model').value; c.llm.api_key_env = $('#l_env').value;
+  c.llm.base_url = $('#l_url').value;
+  c.filters.min_duration_sec = +$('#f_min').value; c.filters.max_duration_sec = +$('#f_max').value;
+  c.filters.min_words = +$('#f_words').value;
+  c.filters.file_name_include = lines($('#f_inc')); c.filters.file_name_exclude = lines($('#f_exc'));
+  c.filters.stop_phrases = lines($('#f_stop')); c.filters.profanity = lines($('#f_prof'));
+
+  c.products = $$('#prods .chk').map(box => ({
+    name: box.querySelector('.p_name').value.trim(),
+    group: box.querySelector('.p_group').value.trim(),
+    required: box.querySelector('.p_req').checked,
+    aliases: lines(box.querySelector('.p_alias')),
+  })).filter(p => p.name);
+
+  c.checks = $$('#checks .chk').map((box,i) => {
+    const old = CFG.checks[i] || {};
+    const type = box.querySelector('.c_type').value;
+    const tf = box.querySelector('.c_tf'), tt = box.querySelector('.c_tt');
+    return {
+      id: old.id || ('check_' + Date.now() + '_' + i),
+      title: box.querySelector('.c_title').value.trim(),
+      category: box.querySelector('.c_cat').value.trim() || 'Общее',
+      type, speaker: box.querySelector('.c_spk').value,
+      weight: +box.querySelector('.c_w').value,
+      required: box.querySelector('.c_req').checked,
+      invert: box.querySelector('.c_inv')?.checked || false,
+      any_of: lines(box.querySelector('.c_any')),
+      all_of: lines(box.querySelector('.c_all')),
+      none_of: lines(box.querySelector('.c_none')),
+      time_from: tf && tf.value !== '' ? +tf.value : null,
+      time_to: tt && tt.value !== '' ? +tt.value : null,
+      metric: box.querySelector('.c_metric')?.value.trim() || '',
+      op: box.querySelector('.c_op')?.value || '<=',
+      value: +(box.querySelector('.c_val')?.value || 0),
+      prompt: box.querySelector('.c_prompt')?.value.trim() || '',
+      comment: old.comment || '',
+    };
+  }).filter(c => c.title);
+  return c;
+}
+$('#addProd').onclick = () => { collect();
+  CFG.products.push({name:'Новый товар', aliases:[], required:false, group:''}); renderProducts(); };
+$('#addCheck').onclick = () => { collect();
+  CFG.checks.push({id:'check_'+Date.now(), title:'Новый пункт', category:'Общее',
+    type:'keyword', speaker:'operator', weight:5, required:false, invert:false,
+    any_of:[], all_of:[], none_of:[], metric:'', op:'<=', value:0, prompt:''});
+  renderChecks(); };
+function showCfgResult(ok, data, verb){
+  const box = $('#cfgMsg');
+  if(!ok){
+    box.innerHTML = `<div class="warnbox" style="background:var(--no-bg);color:var(--no)">
+      Не сохранено. ${esc(data.detail || 'неизвестная ошибка')}</div>`;
+    return;
+  }
+  const warns = data.warnings || [];
+  box.innerHTML = `<span style="color:var(--ok)">${verb}: ${esc(data.path)}</span>` +
+    (warns.length ? `<div class="warnbox" style="margin-top:8px">
+       Сохранено, но обратите внимание:<ul style="margin:6px 0 0 18px">${
+         warns.map(w=>`<li>${esc(w)}</li>`).join('')}</ul></div>` : '');
+}
+$('#cfgSave').onclick = async () => {
+  const body = JSON.stringify({config: collect()});
+  const r = await fetch('/api/config', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body});
+  const d = await r.json();
+  showCfgResult(r.ok, d, 'Сохранено');
+  if(r.ok) loadCfg();
+};
+$('#yamlApply').onclick = async () => {
+  const r = await fetch('/api/config', {method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({yaml: $('#rawYaml').value})});
+  const d = await r.json();
+  showCfgResult(r.ok, d, 'Применено');
+  if(r.ok) loadCfg();
+};
+$('#cfgReset').onclick = async () => {
+  if(!confirm('Вернуться к эталонному конфигу? Текущие правки не сохранятся.')) return;
+  await fetch('/api/config/reset', {method:'POST'}); loadCfg();
+};
+
+
+/* ---------- обучение ---------- */
+let LEARN = null, LJOB = null, LPOLL = null;
+$('#lstart').onclick = async () => {
+  const body = {good: $('#lgood').value.trim(), bad: $('#lbad').value.trim(),
+    min_calls: +$('#lmin').value, max_q: +$('#lq').value, min_lift: +$('#llift').value};
+  if(!body.good || !body.bad) return alert('Укажите обе папки');
+  const r = await fetch('/api/learn', {method:'POST',
+    headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  const d = await r.json();
+  if(!r.ok) return alert(d.detail || 'Не удалось запустить');
+  LJOB = d.job_id;
+  $('#lprogress').classList.remove('hide');
+  $('#lresult').innerHTML = '';
+  clearInterval(LPOLL); LPOLL = setInterval(lpoll, 1000);
+};
+async function lpoll(){
+  const s = await (await fetch(`/api/learn/${LJOB}`)).json();
+  $('#lbar').style.width = (s.progress*100).toFixed(1)+'%';
+  $('#lmsg').textContent = s.message;
+  if(s.status === 'done'){ clearInterval(LPOLL); LEARN = s.result; renderLearn(); }
+  else if(s.status === 'error'){ clearInterval(LPOLL);
+    $('#lmsg').textContent = 'Ошибка: ' + s.error; }
+}
+function pct(x){ return Math.round(x*100) + '%'; }
+function renderLearn(){
+  const d = LEARN;
+  const v = d.validation || {};
+  const val = v.ok
+    ? `<div class="${v.accuracy > v.baseline + 0.1 ? '' : 'warnbox'}" style="${
+        v.accuracy > v.baseline + 0.1 ? 'background:var(--ok-bg);color:var(--ok);border-radius:8px;padding:10px 12px' : ''}">
+        Проверка на отложенных записях: правила угадывают исход в
+        <b>${pct(v.accuracy)}</b> случаев. Простое угадывание большей группы дало бы
+        ${pct(v.baseline)}. AUC ${v.auc}.</div>`
+    : `<div class="warnbox">Проверка не выполнена: ${esc(v.reason||'')}</div>`;
+
+  $('#lresult').innerHTML = `
+    <div class="card">
+      <h2>Что получилось</h2>
+      <div class="kv" style="margin-bottom:12px">
+        <div><b>${d.good_total}</b><span>успешных разобрано</span></div>
+        <div><b>${d.bad_total}</b><span>неуспешных разобрано</span></div>
+        <div><b>${d.phrases.length}</b><span>отличающих фраз</span></div>
+        <div><b>${d.metrics.length}</b><span>отличающих метрик</span></div>
+      </div>
+      ${val}
+      ${(d.warnings||[]).map(w=>`<div class="warnbox" style="margin-top:10px">${esc(w)}</div>`).join('')}
+      ${d.failed?.length ? `<div class="muted" style="margin-top:10px">
+        Не разобрано файлов: ${d.failed.length} — ${esc(d.failed.slice(0,3).join('; '))}</div>` : ''}
+    </div>
+
+    ${d.phrases.length ? `<div class="card">
+      <h2>Отличающие фразы <small>отметьте, что взять в чек-лист</small></h2>
+      <div class="row" style="margin-bottom:10px">
+        <button class="ghost mini2" id="lall">отметить все</button>
+        <button class="ghost mini2" id="lnone">снять все</button>
+        <button class="ghost mini2" id="lsafe">только надёжные</button>
+      </div>
+      <div class="scroll"><table>
+        <thead><tr><th></th><th>Фраза</th><th>Кто</th><th>Признак</th>
+          <th>Успешные</th><th>Неуспешные</th><th>Во сколько раз</th>
+          <th>q</th><th>Где в разговоре</th></tr></thead>
+        <tbody>${d.phrases.map((p,i)=>`<tr>
+          <td><input type="checkbox" class="lph" data-i="${i}" style="width:auto"
+              ${p.outcome_risk?'':'checked'}></td>
+          <td><b>${esc(p.display)}</b>${p.outcome_risk
+            ? ' <span class="tag" title="Звучит в самом конце разговора — вероятно, следствие успеха, а не его причина">следствие?</span>' : ''}</td>
+          <td class="muted">${p.speaker==='operator'?'оператор':'клиент'}</td>
+          <td><span class="pill ${p.direction==='good'?'yes':'no'}">${
+            p.direction==='good'?'успех':'неудача'}</span></td>
+          <td>${pct(p.good_rate)} <span class="muted">(${p.good_calls}/${p.good_total})</span></td>
+          <td>${pct(p.bad_rate)} <span class="muted">(${p.bad_calls}/${p.bad_total})</span></td>
+          <td>${p.lift}×</td>
+          <td class="muted">${p.q_value.toFixed(3)}</td>
+          <td class="muted">${Math.round(p.mean_position*100)}% длины</td>
+        </tr>`).join('')}</tbody></table></div>
+    </div>` : ''}
+
+    ${d.metrics.length ? `<div class="card">
+      <h2>Отличающие метрики</h2>
+      <table><thead><tr><th></th><th>Метрика</th><th>У успешных</th>
+        <th>У неуспешных</th><th>Предлагаемый порог</th><th>Точность</th><th>q</th></tr></thead>
+      <tbody>${d.metrics.map((m,i)=>`<tr>
+        <td><input type="checkbox" class="lmt" data-i="${i}" checked style="width:auto"></td>
+        <td>${esc(m.title)}</td><td>${m.good_mean}</td><td>${m.bad_mean}</td>
+        <td><b>${m.op} ${m.threshold}</b></td><td>${pct(m.accuracy)}</td>
+        <td class="muted">${m.q_value.toFixed(3)}</td></tr>`).join('')}</tbody></table>
+    </div>` : ''}
+
+    ${(d.phrases.length || d.metrics.length) ? `<div class="card">
+      <div class="row">
+        <button class="act" id="lapply">Добавить отмеченные в чек-лист</button>
+        <button class="ghost" id="lpreview">Посмотреть YAML</button>
+        <span class="muted">существующие пункты не изменятся</span>
+      </div>
+      <div id="lmsg2" style="margin-top:10px"></div>
+      <textarea id="lyaml" rows="14" class="hide" style="margin-top:10px"></textarea>
+    </div>` : ''}`;
+
+  const boxes = () => ({
+    phrases: [...document.querySelectorAll('.lph:checked')].map(x=>+x.dataset.i),
+    metrics: [...document.querySelectorAll('.lmt:checked')].map(x=>+x.dataset.i)});
+  $('#lall') && ($('#lall').onclick = () =>
+    $$('.lph,.lmt').forEach(x=>x.checked = true));
+  $('#lnone') && ($('#lnone').onclick = () =>
+    $$('.lph,.lmt').forEach(x=>x.checked = false));
+  $('#lsafe') && ($('#lsafe').onclick = () => {
+    $$('.lph').forEach((x,i)=>x.checked = !d.phrases[i].outcome_risk
+      && d.phrases[i].q_value <= 0.05);
+    $$('.lmt').forEach((x,i)=>x.checked = d.metrics[i].q_value <= 0.05);
+  });
+  $('#lpreview') && ($('#lpreview').onclick = async () => {
+    const r = await fetch(`/api/learn/${LJOB}/preview`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(boxes())});
+    const j = await r.json();
+    $('#lyaml').classList.remove('hide');
+    $('#lyaml').value = j.yaml;
+  });
+  $('#lapply') && ($('#lapply').onclick = async () => {
+    const r = await fetch(`/api/learn/${LJOB}/apply`, {method:'POST',
+      headers:{'Content-Type':'application/json'}, body: JSON.stringify(boxes())});
+    const j = await r.json();
+    $('#lmsg2').innerHTML = r.ok
+      ? `<div class="warnbox" style="background:var(--ok-bg);color:var(--ok)">
+          Добавлено пунктов: ${j.added}. Они появились на вкладке «Настройки» —
+          там их можно переименовать, изменить вес или удалить.</div>`
+      : `<div class="warnbox" style="background:var(--no-bg);color:var(--no)">
+          ${esc(j.detail||'не удалось')}</div>`;
+    if(r.ok) loadCfg();
+  });
+}
+
+/* ---------- утилиты ---------- */
+function stateCell(x){
+  const cls = x.state === 'yes' ? 'yes' : x.state === 'no' ? 'no' : 'na';
+  return `<span class="pill ${cls}">${esc(x.cell || x.status)}</span>`;
+}
+function hits(ev){
+  if(!ev || !ev.length) return '<span class="muted">—</span>';
+  return ev.map(e => `<span class="tag" title="искали: ${esc(e.pattern)}">${
+    esc(e.matched || e.pattern)} · ${esc(e.at)}</span>`).join(' ');
+}
+function esc(s){ return String(s??'').replace(/[&<>"]/g, m =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function fmt(sec){ sec = Math.max(0, +sec||0);
+  const m = Math.floor(sec/60), s = Math.floor(sec%60);
+  return `${m}:${String(s).padStart(2,'0')}`; }
+
+loadCfg();
+</script>
+</body>
+</html>
