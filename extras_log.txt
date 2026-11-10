@@ -1,0 +1,29 @@
+CallQA extras; python: 3.12.2 (tags/v3.12.2:6abddd9, Feb  6 2024, 21:26:36) [MSC v.1937 64 bit (AMD64)]; exe: I:\agent\callqa\.venv\Scripts\python.exe
+
+$ C:\WINDOWS\system32\nvidia-smi.EXE --query-gpu=name,driver_version --format=csv,noheader
+NVIDIA GeForce GTX 1070, 582.66
+
+$ I:\agent\callqa\.venv\Scripts\python.exe -c import sys;sys.path.insert(0, r'I:\agent\callqa');from callqa.asr import cuda_device_present, cuda_libs_loadable;print('DEV', cuda_device_present());print('LIBS', cuda_libs_loadable())
+DEV True
+LIBS True
+
+$ I:\agent\callqa\.venv\Scripts\python.exe -c import sys;sys.path.insert(0, r'I:\agent\callqa');from callqa.asr import cuda_device_present, cuda_libs_loadable;print('DEV', cuda_device_present());print('LIBS', cuda_libs_loadable())
+DEV True
+LIBS True
+
+$ I:\agent\callqa\.venv\Scripts\python.exe -c import torch
+if not torch.cuda.is_available():
+ print('CPU')
+else:
+ try:
+  (torch.ones(8, device='cuda') * 2).sum().item(); print('CUDA_OK')
+ except Exception as e:
+  print('NO_KERNEL', e)
+CUDA_OK
+
+$ C:\WINDOWS\system32\nvidia-smi.EXE --query-gpu=name,driver_version --format=csv,noheader
+NVIDIA GeForce GTX 1070, 582.66
+
+$ I:\agent\callqa\.venv\Scripts\python.exe -c import sys;sys.path.insert(0, r'I:\agent\callqa');from callqa.asr import cuda_device_present, cuda_libs_loadable;print('DEV', cuda_device_present());print('LIBS', cuda_libs_loadable())
+DEV True
+LIBS True

@@ -17,6 +17,7 @@
   python install_extras.py           спросить по каждому пункту
   python install_extras.py --all     поставить всё, что можно, без вопросов
   python install_extras.py --check   только показать, чего не хватает
+  python install_extras.py --torch   только torch под видеокарту (GTX 10 -> 2.8.0+cu126)
 """
 from __future__ import annotations
 
@@ -44,10 +45,24 @@ FFMPEG_URLS = [
 
 # Версия драйвера NVIDIA -> подходящий набор колёс torch
 CUDA_CHANNELS = [
+    (580.0, "cu130"),
+    (570.0, "cu128"),
+    (560.0, "cu126"),
     (550.0, "cu124"),
     (525.0, "cu121"),
     (450.0, "cu118"),
 ]
+
+# Старые видеокарты. Свежие сборки torch их больше не поддерживают: с 2.8
+# cu128+ собираются без Pascal, CUDA 13 не знает Pascal вовсе. Последняя
+# проверенная сборка с Pascal (GTX 10xx, способность 6.1) — 2.8.0+cu126.
+# pyannote 4.x требует torch >= 2.8, так что она ему подходит.
+PASCAL_TORCH = {
+    "tag": "cu126",
+    "min_driver": 560.0,
+    "packages": ["torch==2.8.0", "torchaudio==2.8.0"],
+    "extra": ["torchcodec==0.7.*"],
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -60,11 +75,13 @@ def log(text: str) -> None:
         f.write(text.rstrip() + "\n")
 
 
-def run(cmd: List[str], timeout: int = 5400) -> Tuple[int, str]:
+def run(cmd: List[str], timeout: int = 5400,
+        env: Optional[Dict[str, str]] = None) -> Tuple[int, str]:
     log(f"\n$ {' '.join(str(c) for c in cmd)}")
     try:
         p = subprocess.run([str(c) for c in cmd], capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
+                           encoding="utf-8", errors="replace", timeout=timeout,
+                           env=env)
     except FileNotFoundError:
         log("  -> команда не найдена")
         return 127, ""
@@ -303,17 +320,27 @@ CUDA_LIBS_API = ("https://api.github.com/repos/Purfview/"
 
 
 def cuda_runtime_ready() -> bool:
-    """Проверяет, видит ли CTranslate2 видеокарту (а не просто наличие драйвера)."""
-    code, out = run([sys.executable, "-c",
-                     "import ctranslate2;print('GPUS', ctranslate2.get_cuda_device_count())"],
-                    timeout=180)
+    """Можно ли реально считать на видеокарте.
+
+    Раньше здесь спрашивалось число CUDA-устройств — и этого оказалось
+    мало. Драйвер показывает устройство даже когда cuBLAS и cuDNN не
+    установлены: считать на нём ещё нечем. Установщик из-за этого решал,
+    что всё готово, и библиотеки не ставил, а распознавание падало на
+    первом же файле с «Library cublas64_12.dll is not found».
+    """
+    probe = (
+        "import sys;sys.path.insert(0, r'{root}');"
+        "from callqa.asr import cuda_device_present, cuda_libs_loadable;"
+        "print('DEV', cuda_device_present());"
+        "print('LIBS', cuda_libs_loadable())"
+    ).format(root=str(ROOT))
+    code, out = run([sys.executable, "-c", probe], timeout=180)
+    state = {}
     for line in out.splitlines():
-        if line.startswith("GPUS"):
-            try:
-                return int(line.split()[1]) > 0
-            except (IndexError, ValueError):
-                return False
-    return False
+        parts = line.split()
+        if len(parts) == 2 and parts[0] in ("DEV", "LIBS"):
+            state[parts[0]] = parts[1] == "True"
+    return bool(state.get("DEV") and state.get("LIBS"))
 
 
 def pick_cuda_asset(assets: List[dict]) -> Optional[dict]:
@@ -384,6 +411,7 @@ def install_cuda_libs(gpu: Dict[str, object], assume: Optional[bool] = None) -> 
         return True
 
     say(f"  Видеокарта: {gpu['name']}")
+    say("  Драйвер её показывает, но считать нечем: нет cuBLAS/cuDNN.")
     say("  Для работы на видеокарте нужны библиотеки cuBLAS и cuDNN (около 300 МБ).")
     say("  Ускорение распознавания — примерно в 10 раз. torch для этого НЕ нужен.")
     if not ask("Скачать и положить в bin/?", True, assume):
@@ -423,6 +451,12 @@ def install_cuda_libs(gpu: Dict[str, object], assume: Optional[bool] = None) -> 
     say(f"    распаковано файлов: {n} в {BIN}")
 
     os.environ["PATH"] = str(BIN) + os.pathsep + os.environ.get("PATH", "")
+    adder = getattr(os, "add_dll_directory", None)   # Windows: PATH для DLL не работает
+    if adder is not None:
+        try:
+            adder(str(BIN))
+        except OSError:
+            pass
     if cuda_runtime_ready():
         say("    CUDA работает")
         return True
@@ -468,11 +502,47 @@ def configure_gpu_settings(gpu: Dict[str, object]) -> None:
 #  Локальная языковая модель
 # --------------------------------------------------------------------------- #
 OLLAMA_MODELS = [
-    ("qwen3:8b", "5.2 ГБ", "лучшее качество на русском для 8 ГБ видеопамяти"),
+    ("qwen3.5:9b", "6.6 ГБ", "лучшее на русском для 8 ГБ; есть в I:\\localmodel"),
+    ("qwen3:8b", "5.2 ГБ", "прежняя модель, чуть меньше"),
     ("qwen3:4b", "2.6 ГБ", "вдвое быстрее, качество чуть ниже"),
     ("llama3.1:8b", "4.7 ГБ", "альтернатива, хорошо держит диалог"),
     ("gemma3:4b", "3.3 ГБ", "самая быстрая из пригодных"),
 ]
+
+
+def _ollama_cfg():
+    """Рабочий конфиг с адресом локальной Ollama — для поиска и запуска ollama.exe."""
+    sys.path.insert(0, str(ROOT))
+    from callqa.config import DEFAULT_CONFIG_PATH, Config
+
+    current = os.path.join(os.path.dirname(DEFAULT_CONFIG_PATH), "current.yaml")
+    cfg = Config.load(current if os.path.exists(current) else DEFAULT_CONFIG_PATH)
+    cfg.llm.enabled = True
+    cfg.llm.provider = "openai"
+    if ":11434" not in (cfg.llm.base_url or ""):
+        cfg.llm.base_url = "http://127.0.0.1:11434/v1"
+    return cfg
+
+
+def ollama_cmd(*args: str) -> Tuple[Optional[List[str]], Optional[Dict[str, str]]]:
+    """ollama.exe (в том числе портативная I:\\localmodel) и окружение для него."""
+    try:
+        from callqa import ollama_local
+
+        cmd, env = ollama_local.cli(_ollama_cfg(), *args)
+        return cmd, (env if cmd else None)
+    except Exception:
+        w = shutil.which("ollama")
+        return ([w, *args] if w else None), None
+
+
+def start_ollama() -> Tuple[bool, str]:
+    try:
+        from callqa import ollama_local
+
+        return ollama_local.ensure_running(_ollama_cfg(), log=lambda m: say(f"    {m}"))
+    except Exception as exc:
+        return False, str(exc)
 
 
 def find_local_llm() -> List[dict]:
@@ -485,13 +555,75 @@ def find_local_llm() -> List[dict]:
         return []
 
 
+# Признаки того, что сервер упал именно из-за видеокарты, а не из-за
+# настроек или сети. Для них есть обходной путь — расчёт на процессоре.
+_GPU_FAILURE = ("ptx", "cuda", "cublas", "terminated", "0xc0000409",
+                "out of memory", "kernel image")
+
+
+def _is_gpu_failure(note: str) -> bool:
+    low = (note or "").lower()
+    return any(m in low for m in _GPU_FAILURE)
+
+
+def _explain(llm_mod, cfg, note: str) -> str:
+    """Человеческое объяснение вместо куска чужого лога."""
+    try:
+        text, _fatal = llm_mod.diagnose(RuntimeError(note), cfg)
+        return text
+    except Exception:
+        return f"Сервер не ответил: {note[:200]}"
+
+
+def make_cpu_model(model: str) -> Optional[str]:
+    """Создаёт вариант модели, считающий на процессоре.
+
+    Переменную окружения вроде CUDA_VISIBLE_DEVICES трогать нельзя: она
+    глобальная и отобрала бы видеокарту у распознавания речи, которому
+    она нужнее. Поэтому GPU отключается только для этой модели —
+    параметром num_gpu в её описании.
+    """
+    target = f"{model.split(':')[0]}-cpu"
+    body = f"FROM {model}\nPARAMETER num_gpu 0\n"
+    path = os.path.join(tempfile.gettempdir(), "callqa_cpu.Modelfile")
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(body)
+    except OSError as exc:
+        say(f"    [!] Не удалось записать описание модели: {exc}")
+        return None
+
+    say(f"    создаю «{target}» (без видеокарты) ...")
+    cmd, env = ollama_cmd("create", target, "-f", path)
+    code, out = run(cmd or ["ollama", "create", target, "-f", path], timeout=900, env=env)
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+    if code != 0:
+        say("    [!] Не получилось — см. extras_log.txt")
+        say("        Остаётся обновить драйвер или отключить GPU в настройках")
+        say("        самого сервера модели.")
+        return None
+    return target
+
+
 def setup_local_llm(assume: Optional[bool] = None) -> bool:
     """Подключает локальную модель вместо платного API."""
     servers = find_local_llm()
 
+    exe_cmd, _env = ollama_cmd()
+    if not servers and exe_cmd:
+        say(f"  Ollama найдена: {exe_cmd[0]} — запускаю ...")
+        ok, note = start_ollama()
+        if ok:
+            servers = find_local_llm()
+        else:
+            say(f"    [!] {note}")
+
     if not servers:
         say("  Запущенных локальных LLM-серверов не найдено.")
-        if not shutil.which("ollama"):
+        if not exe_cmd:
             say("  Ollama не установлена. Она даёт локальную модель без платы за запросы.")
             if IS_WIN and shutil.which("winget"):
                 if ask("Установить Ollama через winget?", True, assume):
@@ -517,10 +649,11 @@ def setup_local_llm(assume: Optional[bool] = None) -> bool:
         say("  Рекомендации под вашу видеокарту:")
         for name, size, note in OLLAMA_MODELS:
             say(f"    {name:<16} {size:<9} {note}")
-        if shutil.which("ollama") and ask(
+        if exe_cmd and ask(
                 f"Загрузить {OLLAMA_MODELS[0][0]} сейчас?", True, assume):
             say(f"    выполняю: ollama pull {OLLAMA_MODELS[0][0]}")
-            code, _ = run(["ollama", "pull", OLLAMA_MODELS[0][0]], timeout=5400)
+            cmd, env = ollama_cmd("pull", OLLAMA_MODELS[0][0])
+            code, _ = run(cmd, timeout=5400, env=env)
             if code != 0:
                 say("    [!] Загрузка не удалась — см. extras_log.txt")
                 return False
@@ -554,11 +687,34 @@ def setup_local_llm(assume: Optional[bool] = None) -> bool:
     cfg.llm.model = model
     cfg.llm.api_key = ""
     cfg.llm.compact = "auto"        # локальным моделям — укороченный запрос
+    if srv.get("name") == "Ollama" and exe_cmd:
+        cfg.llm.ollama_exe = exe_cmd[0]  # чтобы CallQA сам запускал именно её
 
     say("    проверяю ...")
     ok, note = llm_mod.check_connection(cfg)
+
+    if not ok and _is_gpu_failure(note):
+        say(f"    [!] {_explain(llm_mod, cfg, note)}")
+        say()
+        say("    Видеокарта GTX 10-й серии и старее часто не тянет свежие")
+        say("    сборки: драйвер не принимает код, собранный новым CUDA.")
+        say("    Лечится обновлением драйвера NVIDIA (для GTX 10xx — ветка 580,")
+        say("    она последняя с поддержкой этих карт).")
+        say()
+        say("    Прямо сейчас можно обойтись без обновления: сделать вариант")
+        say("    модели, считающий на процессоре. Медленнее, но работает.")
+        cpu_model = None
+        if exe_cmd and ask("Сделать CPU-вариант модели?", True, assume):
+            cpu_model = make_cpu_model(model)
+        if cpu_model:
+            cfg.llm.model = cpu_model
+            say(f"    проверяю «{cpu_model}» ...")
+            ok, note = llm_mod.check_connection(cfg)
+
     if not ok:
-        say(f"    [!] Сервер не ответил: {note}")
+        say(f"    [!] {_explain(llm_mod, cfg, note)}")
+        say("    Чек-лист работает и без модели: смысловые пункты будут «н/д»")
+        say("    и на балл не повлияют.")
         if not ask("Всё равно сохранить настройку?", False, None):
             return False
     else:
@@ -572,62 +728,126 @@ def setup_local_llm(assume: Optional[bool] = None) -> bool:
 # --------------------------------------------------------------------------- #
 #  torch
 # --------------------------------------------------------------------------- #
+def gpu_capability() -> Optional[float]:
+    try:
+        sys.path.insert(0, str(ROOT))
+        from callqa.asr import compute_capability
+
+        return compute_capability()
+    except Exception:
+        return None
+
+
+def torch_plan(gpu: Dict[str, object]) -> Dict[str, object]:
+    """Какой torch ставить под эту видеокарту.
+
+    kind: cuda — сборка с CUDA; cpu — обычная; old_driver — карта подходит,
+    но драйвер слишком старый. Для Pascal версия закреплена: свежий torch
+    на GTX 10xx ставится, но видеокарту не видит.
+    """
+    if not gpu.get("present"):
+        return {"kind": "cpu", "packages": ["torch", "torchaudio"], "extra": [],
+                "why": "видеокарты NVIDIA нет"}
+    driver = float(gpu.get("driver") or 0.0)
+    cc = gpu_capability()
+    if cc is not None and cc < 6.0:
+        return {"kind": "cpu", "packages": ["torch", "torchaudio"], "extra": [],
+                "cc": cc, "why": f"видеокарта слишком старая для torch с CUDA "
+                                 f"(способность {cc})"}
+    if cc is not None and cc < 7.0:
+        plan = {"kind": "cuda", "tag": PASCAL_TORCH["tag"], "cc": cc,
+                "packages": list(PASCAL_TORCH["packages"]),
+                "extra": list(PASCAL_TORCH["extra"]), "pinned": True,
+                "why": f"серия GTX 10 (способность {cc}): последний torch с её "
+                       "поддержкой — 2.8.0+cu126"}
+        if driver and driver < PASCAL_TORCH["min_driver"]:
+            plan["kind"] = "old_driver"
+            plan["why"] = (f"для torch 2.8.0+cu126 нужен драйвер "
+                           f"{PASCAL_TORCH['min_driver']:.0f}+, сейчас {driver}")
+        return plan
+    tag = cuda_channel(driver) if driver else "cu126"
+    if tag is None:
+        return {"kind": "old_driver", "packages": ["torch", "torchaudio"], "extra": [],
+                "cc": cc, "why": f"драйвер {driver} слишком старый для CUDA-сборок torch"}
+    return {"kind": "cuda", "tag": tag, "cc": cc, "packages": ["torch", "torchaudio"],
+            "extra": [], "pinned": False, "why": f"драйвер {driver} -> {tag}"}
+
+
+def _pip_torch(plan: Dict[str, object]) -> int:
+    args = list(plan["packages"])
+    if plan.get("kind") == "cuda":
+        args += ["--index-url", f"https://download.pytorch.org/whl/{plan['tag']}"]
+    code = pip(*args)
+    # torchcodec от свежего torch со старым не загрузится — ставим парную версию
+    if code == 0 and plan.get("extra"):
+        code = pip(*plan["extra"])
+    return code
+
+
 def install_torch(gpu: Dict[str, object], assume: Optional[bool] = None) -> bool:
+    plan = torch_plan(gpu)
     if have("torch"):
-        import torch
-
-        if torch.cuda.is_available():
-            say(f"  torch уже есть, видеокарта работает: {torch.cuda.get_device_name(0)}")
+        state = _cuda_works()
+        if state == "CUDA_OK":
+            say("  torch уже есть, видеокарта работает")
             return True
-        if not gpu["present"]:
-            say("  torch уже есть (режим CPU, видеокарты NVIDIA нет)")
+        if plan["kind"] == "cpu":
+            say(f"  torch уже есть (режим CPU: {plan['why']})")
             return True
-        say("  torch установлен, но не видит видеокарту — переустановлю под CUDA.")
+        if state == "NO_KERNEL":
+            say("  torch видит видеокарту, но собран без её поддержки — "
+                "эта версия torch для неё слишком новая.")
+        else:
+            say("  torch установлен, но не видит видеокарту.")
 
-    if gpu["present"]:
-        driver = float(gpu["driver"] or 0.0)
-        tag = cuda_channel(driver) if driver else "cu121"
-        say(f"  Видеокарта: {gpu['name']}")
-        if driver:
-            say(f"  Драйвер: {driver}")
-        if tag is None:
-            say("  [!] Драйвер слишком старый для CUDA-сборок torch.")
-            say("      Обновите драйвер NVIDIA или продолжайте на CPU.")
-            tag = None
-        if tag:
-            say(f"  Поставлю torch с CUDA ({tag}). Загрузка около 2.5 ГБ,")
-            say("  зато распознавание ускорится в 10–30 раз.")
-            if ask("Ставить?", True, assume):
-                code = pip("torch", "torchaudio", "--index-url",
-                           f"https://download.pytorch.org/whl/{tag}")
-                if code != 0 and tag != "cu121":
-                    say("    не вышло, пробую cu121 ...")
-                    code = pip("torch", "torchaudio", "--index-url",
-                               "https://download.pytorch.org/whl/cu121")
-                if code == 0 and _cuda_works():
-                    return True
-                say("    [!] CUDA-сборка не заработала, ставлю обычную (CPU).")
-            else:
-                return False
-    else:
-        say("  Видеокарта NVIDIA не найдена — GPU-ускорение недоступно.")
-        say("  torch нужен только для точной диаризации моно-записей (pyannote).")
-        if not ask("Поставить torch для CPU (около 250 МБ)?", False, assume):
+    say(f"  Видеокарта: {gpu.get('name') or '—'}; драйвер: {gpu.get('driver') or '—'}")
+    say(f"  {plan['why']}")
+    if plan["kind"] == "old_driver":
+        say("  [!] Сначала обновите драйвер NVIDIA (nvidia.com/drivers), потом")
+        say("      запустите:  install_extras.bat --torch")
+        return False
+    if plan["kind"] == "cuda":
+        pkgs = " ".join(plan["packages"])
+        say(f"  Поставлю {pkgs} ({plan['tag']}). Загрузка около 2.5 ГБ.")
+        say("  Нужен только pyannote: разделение голосов в моно и база голосов")
+        say("  операторов. Распознавание речи на видеокарте работает и без него.")
+        if not ask("Ставить?", True, assume):
             return False
+        code = _pip_torch(plan)
+        state = _cuda_works() if code == 0 else ""
+        if state == "CUDA_OK":
+            say("    готово: torch работает на видеокарте")
+            return True
+        say("    [!] Сборка с CUDA не заработала — см. extras_log.txt. pyannote "
+            "продолжит работать на процессоре.")
+        return False
 
-    code = pip("torch", "torchaudio")
-    if code != 0:
+    if have("torch"):
+        return True
+    if not ask("Поставить torch для CPU (около 250 МБ)?", False, assume):
+        return False
+    if pip("torch", "torchaudio") != 0:
         say("    [!] Не установилось — см. extras_log.txt")
         return False
-    say("    готово" + (" (режим CPU)" if not _cuda_works() else " (CUDA работает)"))
+    say("    готово (режим CPU)")
     return True
 
 
-def _cuda_works() -> bool:
+def _cuda_works() -> str:
+    """CUDA_OK — считает на видеокарте; NO_KERNEL — видит, но собран без её
+    поддержки (свежий torch на GTX 10xx); CPU — не видит; "" — torch нет."""
     code, out = run([sys.executable, "-c",
-                     "import torch;print('CUDA_OK' if torch.cuda.is_available() else 'CPU')"],
-                    timeout=180)
-    return "CUDA_OK" in out
+                     "import torch\n"
+                     "if not torch.cuda.is_available():\n print('CPU')\n"
+                     "else:\n"
+                     " try:\n"
+                     "  (torch.ones(8, device='cuda') * 2).sum().item(); print('CUDA_OK')\n"
+                     " except Exception as e:\n  print('NO_KERNEL', e)"],
+                    timeout=300)
+    for mark in ("CUDA_OK", "NO_KERNEL", "CPU"):
+        if mark in out:
+            return mark
+    return ""
 
 
 # --------------------------------------------------------------------------- #
@@ -644,7 +864,10 @@ def install_pyannote(assume: Optional[bool] = None) -> bool:
         return False
     if not have("torch"):
         say("    сначала нужен torch — ставлю его ...")
-        if pip("torch", "torchaudio") != 0:
+        plan = torch_plan(detect_gpu())
+        if plan["kind"] != "cuda":
+            plan = {"kind": "cpu", "packages": ["torch", "torchaudio"], "extra": []}
+        if _pip_torch(plan) != 0:
             say("    [!] torch не установился, pyannote без него не работает")
             return False
     code = pip("pyannote.audio")
@@ -673,9 +896,11 @@ def setup_hf_token(assume: Optional[bool] = None) -> bool:
 
     say("  Токен HuggingFace нужен pyannote, чтобы скачать модель. Он бесплатный.")
     say("    1. huggingface.co -> зарегистрируйтесь")
-    say("    2. примите условия моделей:")
+    say("    2. примите условия моделей (кнопка Agree на странице модели):")
+    say("       huggingface.co/pyannote/speaker-diarization-community-1")
     say("       huggingface.co/pyannote/speaker-diarization-3.1")
     say("       huggingface.co/pyannote/segmentation-3.0")
+    say("       huggingface.co/pyannote/wespeaker-voxceleb-resnet34-LM  (база голосов)")
     say("    3. Settings -> Access Tokens -> New token (тип Read)")
     if assume is not None:
         say("  (пропускаю: токен нельзя получить автоматически)")
@@ -685,7 +910,9 @@ def setup_hf_token(assume: Optional[bool] = None) -> bool:
     token = ask_secret("Токен (hf_...)")
     if not token:
         return False
-    cfg.speakers.hf_token = token
+    from callqa.config import clean_hf_token
+
+    cfg.speakers.hf_token = clean_hf_token(token)
     cfg.save(current)
     say(f"    записан в {current}")
     return True
@@ -925,6 +1152,8 @@ def main() -> int:
     ap.add_argument("--all", action="store_true",
                     help="поставить всё, что можно, без вопросов")
     ap.add_argument("--check", action="store_true", help="только показать состояние")
+    ap.add_argument("--torch", action="store_true",
+                    help="только поставить torch под видеокарту (для pyannote)")
     ap.add_argument("--no-venv-switch", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args()
 
@@ -946,6 +1175,14 @@ def main() -> int:
 
     if args.check:
         return 0
+
+    if args.torch:
+        say("-" * 52)
+        say("  torch под видеокарту (для pyannote)")
+        ok = install_torch(st["gpu_hw"], True if args.all else None)
+        say()
+        say("  Проверка:  run_cli.bat doctor")
+        return 0 if ok else 1
 
     assume: Optional[bool] = True if args.all else None
     if args.all:
@@ -990,6 +1227,12 @@ def main() -> int:
     if install_pyannote(assume):
         setup_hf_token(assume)
     say()
+
+    if have("pyannote.audio") and st["gpu_hw"]["present"]:
+        say("-" * 52)
+        say("  5. pyannote на видеокарте (необязательно)")
+        install_torch(st["gpu_hw"], assume)
+        say()
 
     say("=" * 52)
     say("  Стало:")
